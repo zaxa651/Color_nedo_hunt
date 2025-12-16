@@ -468,7 +468,7 @@ class ColorRecolorApp:
     
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("🎨 Color Alchemist - Мастерская цветовых трансформаций")
+        self.root.title("🎨 Color Nedo Hunt - Мастерская цветовых трансформаций")
         
         # Настраиваем стиль
         self._setup_styles()
@@ -548,7 +548,7 @@ class ColorRecolorApp:
         title_frame.pack(side='left', fill='x', expand=True)
         
         title_label = tk.Label(title_frame, 
-                              text="🎨 Color Alchemist", 
+                              text="🎨 Color Nedo Hunt", 
                               font=('Segoe UI', 24, 'bold'),
                               bg='#34495e', fg='#ecf0f1')
         title_label.pack(side='left', padx=20, pady=15)
@@ -1077,7 +1077,7 @@ class ColorRecolorApp:
     def _show_help(self):
         """Показывает справку по приложению"""
         help_text = """
-🎨 Color Alchemist - Помощь
+🎨 Color Nedo Hunt - Помощь
 
 1. ВВОД ЦВЕТОВ:
    • Введите HEX-коды цветов в поля (например, #3498db)
@@ -1100,7 +1100,7 @@ class ColorRecolorApp:
    • Новые цвета показываются в превью колонок
    • Можно копировать текст (ПКМ → Копировать)
 """
-        messagebox.showinfo("Справка - Color Alchemist", help_text)
+        messagebox.showinfo("Справка - Color Nedo Hunt", help_text)
     
     def _show_results_help(self):
         """Показывает справку по результатам"""
