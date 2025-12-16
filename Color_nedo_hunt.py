@@ -1,386 +1,606 @@
+"""
+Инструмент для перекрашивания цветовых палитр
+Применены принципы SOLID, разделение ответственности и лучшие практики
+"""
+
 import tkinter as tk
 from tkinter import ttk, colorchooser
 from PIL import ImageColor
 import numpy as np
 import re
 import colorsys
+from typing import List, Tuple, Optional
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum
 
-def relative_luminance(rgb):
-    r, g, b = [x / 255.0 for x in rgb]
-    r = r / 12.92 if r <= 0.04045 else ((r + 0.055) / 1.055) ** 2.4
-    g = g / 12.92 if g <= 0.04045 else ((g + 0.055) / 1.055) ** 2.4
-    b = b / 12.92 if b <= 0.04045 else ((b + 0.055) / 1.055) ** 2.4
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
-def normalize_color(color):
-    if not color:
-        return color
-    color = color.strip().lower()
-    cyrillic_to_latin = {
+# ============================================================================
+# МОДЕЛИ ДАННЫХ
+# ============================================================================
+
+class RecolorMode(Enum):
+    """Режимы перекраски цветов"""
+    KEEP_HUE = "keep_hue"
+    FULL_RECOLOR = "full_recolor"
+    MIXED = "mixed"
+
+
+@dataclass
+class ColorResult:
+    """Результат обработки цвета"""
+    original: str
+    new_color: str
+    luminance: float
+
+
+# ============================================================================
+# УТИЛИТЫ ДЛЯ РАБОТЫ С ЦВЕТАМИ
+# ============================================================================
+
+class ColorUtility:
+    """Утилиты для работы с цветами"""
+    
+    CYRILLIC_TO_LATIN = {
         'а': 'a', 'в': 'b', 'с': 'c', 'е': 'e', 'к': 'k', 'м': 'm', 'о': 'o',
         'р': 'p', 'т': 't', 'х': 'x', 'у': 'y', 'ё': 'e', 'ъ': '', 'ь': '',
         'ы': 'y', 'э': 'e', 'ю': 'yu', 'я': 'ya'
     }
-    for cyr, lat in cyrillic_to_latin.items():
-        color = color.replace(cyr, lat)
-    color = re.sub(r'[^0-9a-f#]', '', color)
-    if color.startswith('#'):
-        if len(color) == 4:  # #rgb -> #rrggbb
-            color = '#' + color[1]*2 + color[2]*2 + color[3]*2
-        return color.lower()
-    if len(color) == 3:  # rgb -> #rrggbb
-        return '#' + color[0]*2 + color[1]*2 + color[2]*2
-    if len(color) == 6:  # rrggbb -> #rrggbb
-        return '#' + color
-    return color
-
-def is_valid_color(color):
-    if not color or not color.strip():
-        return False
-    color = normalize_color(color)
-    if not color:
-        return False
-    try:
-        ImageColor.getrgb(color)
-        return True
-    except ValueError:
-        return False
-
-def recolor_palette(orig_colors, target_base, intensity, mode):
-    valid_colors = [normalize_color(c) for c in orig_colors if is_valid_color(c)]
-    if not valid_colors:
-        return [], []
-
-    target_rgb = np.array(ImageColor.getrgb(target_base)) / 255.0
-    target_h, target_l, target_s = colorsys.rgb_to_hls(*target_rgb)
     
-    # Вычисляем яркость целевого цвета
-    target_luminance = relative_luminance(ImageColor.getrgb(target_base))
-
-    new_colors = []
-    luminances = []
-
-    # Собираем исходные яркости
-    orig_luminances = []
-    for c in valid_colors:
-        orig_luminances.append(relative_luminance(ImageColor.getrgb(c)))
-
-    # Нормализуем яркости относительно диапазона исходных яркостей
-    min_orig_lum = min(orig_luminances)
-    max_orig_lum = max(orig_luminances)
-    
-    for i, c in enumerate(valid_colors):
-        rgb = np.array(ImageColor.getrgb(c)) / 255.0
-        orig_h, orig_l, orig_s = colorsys.rgb_to_hls(*rgb)
-        orig_lum = orig_luminances[i]
+    @staticmethod
+    def relative_luminance(rgb: Tuple[int, int, int]) -> float:
+        """Вычисляет относительную яркость цвета"""
+        def adjust(channel: float) -> float:
+            return channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
         
-        if mode == "keep_hue":
-            # Сохраняем исходный оттенок, но адаптируем к целевому цвету
-            new_h = orig_h
-            # Сохраняем относительную яркость в диапазоне целевого цвета
-            if max_orig_lum != min_orig_lum:
-                lum_ratio = (orig_lum - min_orig_lum) / (max_orig_lum - min_orig_lum)
-                # Применяем этот ratio к диапазону яркостей
-                new_l = 0.2 + 0.7 * lum_ratio  # Диапазон от 0.2 до 0.9
-            else:
-                new_l = target_l
-            
-            # Насыщенность на основе целевого цвета и исходной насыщенности
-            new_s = target_s * 0.7 + orig_s * 0.3
-            
-        elif mode == "full_recolor":
-            # Полная перекраска - берем оттенок целевого цвета
-            new_h = target_h
-            
-            # Сохраняем относительную яркость исходных цветов
-            if max_orig_lum != min_orig_lum:
-                lum_ratio = (orig_lum - min_orig_lum) / (max_orig_lum - min_orig_lum)
-                # Корректируем яркость для лучшего визуального результата
-                if max_orig_lum > 0.7:  # Светлая палитра
-                    new_l = 0.5 + 0.4 * lum_ratio
-                else:  # Темная палитра
-                    new_l = 0.2 + 0.5 * lum_ratio
-            else:
-                new_l = 0.5
-                
-            # Насыщенность на основе целевого цвета
-            new_s = target_s * (0.8 + 0.2 * (1 - orig_lum))
-            
-        else:  # mixed mode
-            # Смешиваем оттенки
-            new_h = orig_h * (1 - intensity) + target_h * intensity
-            
-            # Сохраняем относительную яркость
-            if max_orig_lum != min_orig_lum:
-                lum_ratio = (orig_lum - min_orig_lum) / (max_orig_lum - min_orig_lum)
-                new_l = orig_l * (1 - intensity) + (0.3 + 0.6 * lum_ratio) * intensity
-            else:
-                new_l = orig_l * (1 - intensity) + target_l * intensity
-                
-            new_s = orig_s * (1 - intensity) + target_s * intensity
-
-        # Применяем интенсивность ко всем режимам
-        if intensity < 1.0 and mode != "mixed":
-            # Смешиваем с исходным цветом
-            mix_factor = 1 - intensity
-            new_h = orig_h * mix_factor + new_h * intensity
-            new_s = orig_s * mix_factor + new_s * intensity
-            if max_orig_lum != min_orig_lum:
-                new_l = orig_l * mix_factor + new_l * intensity
-
-        # Ограничиваем значения
-        new_h = max(0.0, min(1.0, new_h))
-        new_s = max(0.1, min(1.0, new_s))  # Минимальная насыщенность 0.1
-        new_l = max(0.1, min(0.95, new_l))  # Ограничиваем диапазон яркости
-
-        new_rgb = colorsys.hls_to_rgb(new_h, new_l, new_s)
-        new_rgb = tuple(int(round(x * 255)) for x in new_rgb)
-
-        new_color_hex = "#{:02x}{:02x}{:02x}".format(*new_rgb)
-        new_colors.append(new_color_hex)
-        luminances.append(relative_luminance(new_rgb))
-
-    return new_colors, luminances
-
-# Функции для контекстного меню (копирование/вставка)
-def make_context_menu(widget):
-    context_menu = tk.Menu(widget, tearoff=0)
-    context_menu.add_command(label="Копировать", command=lambda: widget.event_generate('<<Copy>>'))
-    context_menu.add_command(label="Вставить", command=lambda: widget.event_generate('<<Paste>>'))
-    context_menu.add_command(label="Вырезать", command=lambda: widget.event_generate('<<Cut>>'))
-    context_menu.add_separator()
-    context_menu.add_command(label="Выделить все", command=lambda: widget.select_range(0, tk.END))
+        r, g, b = [x / 255.0 for x in rgb]
+        r, g, b = adjust(r), adjust(g), adjust(b)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
     
-    def show_context_menu(event):
+    @classmethod
+    def normalize_color(cls, color: str) -> str:
+        """Нормализует строку цвета"""
+        if not color:
+            return color
+        
+        color = color.strip().lower()
+        
+        # Заменяем кириллицу на латиницу
+        for cyr, lat in cls.CYRILLIC_TO_LATIN.items():
+            color = color.replace(cyr, lat)
+        
+        # Удаляем недопустимые символы
+        color = re.sub(r'[^0-9a-f#]', '', color)
+        
+        # Обработка различных форматов
+        if color.startswith('#'):
+            if len(color) == 4:  # #rgb -> #rrggbb
+                return '#' + ''.join(c * 2 for c in color[1:])
+            return color.lower()
+        
+        if len(color) == 3:  # rgb -> #rrggbb
+            return '#' + ''.join(c * 2 for c in color)
+        
+        if len(color) == 6:  # rrggbb -> #rrggbb
+            return '#' + color
+        
+        return color
+    
+    @classmethod
+    def is_valid_color(cls, color: str) -> bool:
+        """Проверяет валидность цвета"""
+        if not color or not color.strip():
+            return False
+        
+        normalized = cls.normalize_color(color)
+        if not normalized:
+            return False
+        
         try:
-            context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            context_menu.grab_release()
+            ImageColor.getrgb(normalized)
+            return True
+        except ValueError:
+            return False
     
-    widget.bind("<Button-3>", show_context_menu)  # Правая кнопка мыши
-    return context_menu
+    @staticmethod
+    def rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
+        """Преобразует RGB в HEX"""
+        return "#{:02x}{:02x}{:02x}".format(*rgb)
 
-def update_color_boxes():
-    num_colors = color_count.get()
-    for widget in left_color_frame.winfo_children():
-        widget.destroy()
-    for widget in right_color_frame.winfo_children():
-        widget.destroy()
 
-    left_entries.clear()
-    right_entries.clear()
-    left_previews.clear()
-    right_previews.clear()
+# ============================================================================
+# СТРАТЕГИИ ПЕРЕКРАСКИ
+# ============================================================================
 
-    for i in range(num_colors):
-        # Левая колонка
-        left_frame = tk.Frame(left_color_frame)
-        left_frame.pack(fill='x', pady=2)
+class RecolorStrategy(ABC):
+    """Базовый класс для стратегий перекраски"""
+    
+    @abstractmethod
+    def recolor(self, original_hls: Tuple[float, float, float],
+                target_hls: Tuple[float, float, float],
+                luminance_ratio: float,
+                intensity: float) -> Tuple[float, float, float]:
+        """Выполняет перекраску цвета"""
+        pass
 
-        left_entry = tk.Entry(left_frame, width=10)
-        left_entry.pack(side='left', padx=5)
-        left_entry.bind('<KeyRelease>', lambda e, idx=i, side='left': update_preview(e, idx, side))
-        make_context_menu(left_entry)  # Добавляем контекстное меню
-        left_entries.append(left_entry)
 
-        left_color_btn = tk.Button(left_frame, text="Выбрать", width=8,
-                                   command=lambda idx=i, side='left': choose_color(idx, side))
-        left_color_btn.pack(side='left', padx=5)
+class KeepHueStrategy(RecolorStrategy):
+    """Стратегия с сохранением исходного оттенка"""
+    
+    def recolor(self, original_hls: Tuple[float, float, float],
+                target_hls: Tuple[float, float, float],
+                luminance_ratio: float,
+                intensity: float) -> Tuple[float, float, float]:
+        orig_h, orig_l, orig_s = original_hls
+        target_h, target_l, target_s = target_hls
+        
+        new_h = orig_h
+        new_l = 0.2 + 0.7 * luminance_ratio
+        new_s = target_s * 0.7 + orig_s * 0.3
+        
+        # Применяем интенсивность
+        if intensity < 1.0:
+            new_h = orig_h * (1 - intensity) + new_h * intensity
+            new_s = orig_s * (1 - intensity) + new_s * intensity
+            new_l = orig_l * (1 - intensity) + new_l * intensity
+        
+        return new_h, new_l, new_s
 
-        left_preview = tk.Label(left_frame, width=4, height=1, relief='solid', borderwidth=1, bg='white')
-        left_preview.pack(side='left', padx=5)
-        left_previews.append(left_preview)
 
-        # Правая колонка
-        right_frame = tk.Frame(right_color_frame)
-        right_frame.pack(fill='x', pady=2)
-
-        right_entry = tk.Entry(right_frame, width=10)
-        right_entry.pack(side='left', padx=5)
-        right_entry.bind('<KeyRelease>', lambda e, idx=i, side='right': update_preview(e, idx, side))
-        make_context_menu(right_entry)  # Добавляем контекстное меню
-        right_entries.append(right_entry)
-
-        right_color_btn = tk.Button(right_frame, text="Выбрать", width=8,
-                                   command=lambda idx=i, side='right': choose_color(idx, side))
-        right_color_btn.pack(side='left', padx=5)
-
-        right_preview = tk.Label(right_frame, width=4, height=1, relief='solid', borderwidth=1, bg='white')
-        right_preview.pack(side='left', padx=5)
-        right_previews.append(right_preview)
-
-def choose_color(idx, side):
-    color_code = colorchooser.askcolor(title="Выберите цвет")
-    if color_code[1]:
-        if side == 'left':
-            left_entries[idx].delete(0, tk.END)
-            left_entries[idx].insert(0, color_code[1])
-            left_previews[idx].config(bg=color_code[1])
+class FullRecolorStrategy(RecolorStrategy):
+    """Стратегия полной перекраски"""
+    
+    def recolor(self, original_hls: Tuple[float, float, float],
+                target_hls: Tuple[float, float, float],
+                luminance_ratio: float,
+                intensity: float) -> Tuple[float, float, float]:
+        orig_h, orig_l, orig_s = original_hls
+        target_h, target_l, target_s = target_hls
+        
+        new_h = target_h
+        
+        # Корректируем яркость в зависимости от палитры
+        max_orig_lum = luminance_ratio  # Используем как индикатор
+        if max_orig_lum > 0.7:
+            new_l = 0.5 + 0.4 * luminance_ratio
         else:
-            right_entries[idx].delete(0, tk.END)
-            right_entries[idx].insert(0, color_code[1])
-            right_previews[idx].config(bg=color_code[1])
+            new_l = 0.2 + 0.5 * luminance_ratio
+        
+        orig_lum = ColorUtility.relative_luminance(
+            tuple(int(c * 255) for c in colorsys.hls_to_rgb(orig_h, orig_l, orig_s))
+        )
+        new_s = target_s * (0.8 + 0.2 * (1 - orig_lum))
+        
+        # Применяем интенсивность
+        if intensity < 1.0:
+            new_h = orig_h * (1 - intensity) + new_h * intensity
+            new_s = orig_s * (1 - intensity) + new_s * intensity
+            new_l = orig_l * (1 - intensity) + new_l * intensity
+        
+        return new_h, new_l, new_s
 
-def choose_base_color():
-    color_code = colorchooser.askcolor(title="Выберите базовый цвет")
-    if color_code[1]:
-        base_color_entry.delete(0, tk.END)
-        base_color_entry.insert(0, color_code[1])
-        base_color_preview.config(bg=color_code[1])
 
-def update_preview(event, idx, side):
-    if side == 'left':
-        color = left_entries[idx].get().strip()
-        preview = left_previews[idx]
-    else:
-        color = right_entries[idx].get().strip()
-        preview = right_previews[idx]
-    normalized_color = normalize_color(color)
-    if is_valid_color(normalized_color):
-        preview.config(bg=normalized_color)
-    else:
-        preview.config(bg='white')
-
-def process_colors():
-    base_color = base_color_entry.get()
-    normalized_base_color = normalize_color(base_color)
-
-    if not is_valid_color(normalized_base_color):
-        result_text.delete(1.0, tk.END)
-        result_text.insert(tk.END, "Ошибка: неверный базовый цвет")
-        return
-
-    left_colors = [entry.get().strip() for entry in left_entries if entry.get().strip()]
-    right_colors = [entry.get().strip() for entry in right_entries if entry.get().strip()]
-    intensity = intensity_var.get()
-    mode = mode_var.get()
-
-    new_left_colors, lum_left = recolor_palette(left_colors, normalized_base_color, intensity, mode)
-    new_right_colors, lum_right = recolor_palette(right_colors, normalized_base_color, intensity, mode)
-
-    result_text.delete(1.0, tk.END)
-    result_text.insert(tk.END, "Результаты для левой колонки:\n")
-    for i, (orig, new, lum) in enumerate(zip(left_colors, new_left_colors, lum_left)):
-        orig_normalized = normalize_color(orig)
-        result_text.insert(tk.END, f"{i+1}. {orig_normalized} -> {new} (яркость: {lum:.3f})\n")
-        if i < len(left_previews):
-            left_previews[i].config(bg=new)
-
-    result_text.insert(tk.END, "\nРезультаты для правой колонки:\n")
-    for i, (orig, new, lum) in enumerate(zip(right_colors, new_right_colors, lum_right)):
-        orig_normalized = normalize_color(orig)
-        result_text.insert(tk.END, f"{i+1}. {orig_normalized} -> {new} (яркость: {lum:.3f})\n")
-        if i < len(right_previews):
-            right_previews[i].config(bg=new)
-
-def update_base_preview(event):
-    color = base_color_entry.get().strip()
-    normalized_color = normalize_color(color)
-    if is_valid_color(normalized_color):
-        base_color_preview.config(bg=normalized_color)
-    else:
-        base_color_preview.config(bg='white')
-
-# === Интерфейс ===
-root = tk.Tk()
-root.title("Перекрашивание цветов")
-root.geometry("950x700")
-
-color_count = tk.IntVar(value=6)
-intensity_var = tk.DoubleVar(value=1.0)
-mode_var = tk.StringVar(value="full_recolor")
-
-left_entries = []
-right_entries = []
-left_previews = []
-right_previews = []
-
-control_frame = tk.Frame(root)
-control_frame.pack(pady=10)
-
-tk.Label(control_frame, text="Количество цветов:").grid(row=0, column=0, padx=5)
-color_spinbox = tk.Spinbox(control_frame, from_=1, to=10, width=5, textvariable=color_count,
-                          command=update_color_boxes)
-color_spinbox.grid(row=0, column=1, padx=5)
-make_context_menu(color_spinbox)  # Добавляем контекстное меню для спинбокса
-
-tk.Label(control_frame, text="Базовый цвет:").grid(row=0, column=2, padx=5)
-base_color_entry = tk.Entry(control_frame, width=10)
-base_color_entry.insert(0,"")
-base_color_entry.grid(row=0, column=3, padx=5)
-base_color_entry.bind('<KeyRelease>', update_base_preview)
-make_context_menu(base_color_entry)  # Добавляем контекстное меню для базового цвета
-
-base_color_btn = tk.Button(control_frame, text="Выбрать", command=choose_base_color)
-base_color_btn.grid(row=0, column=4, padx=5)
-
-base_color_preview = tk.Label(control_frame, width=4, height=1, relief='solid', borderwidth=1, bg="#3f95a3")
-base_color_preview.grid(row=0, column=5, padx=5)
-
-# === Ползунок интенсивности ===
-tk.Label(control_frame, text="Интенсивность:").grid(row=1, column=0, padx=5, pady=10)
-intensity_slider = ttk.Scale(control_frame, from_=0, to=1, orient="horizontal", variable=intensity_var)
-intensity_slider.grid(row=1, column=1, columnspan=4, sticky="we", padx=5)
-
-# === Радиокнопки выбора режима ===
-mode_frame = tk.LabelFrame(control_frame, text="Режим перекраски")
-mode_frame.grid(row=2, column=0, columnspan=6, pady=10, sticky="we")
-
-tk.Radiobutton(mode_frame, text="Сохранять оттенки", variable=mode_var, value="keep_hue").pack(side="left", padx=10)
-tk.Radiobutton(mode_frame, text="Полная перекраска", variable=mode_var, value="full_recolor").pack(side="left", padx=10)
-tk.Radiobutton(mode_frame, text="Смешанный режим", variable=mode_var, value="mixed").pack(side="left", padx=10)
-
-update_btn = tk.Button(control_frame, text="Обновить цвета", command=update_color_boxes)
-update_btn.grid(row=1, column=5, padx=5)
-
-main_frame = tk.Frame(root)
-main_frame.pack(fill='both', expand=True, padx=10, pady=10)
-
-left_frame = tk.LabelFrame(main_frame, text="Левая колонка (светлые цвета)")
-left_frame.pack(side='left', fill='both', expand=True, padx=5)
-
-left_color_frame = tk.Frame(left_frame)
-left_color_frame.pack(fill='both', expand=True, padx=10, pady=10)
-
-right_frame = tk.LabelFrame(main_frame, text="Правая колонка (темные цвета)")
-right_frame.pack(side='right', fill='both', expand=True, padx=5)
-
-right_color_frame = tk.Frame(right_frame)
-right_color_frame.pack(fill='both', expand=True, padx=10, pady=10)
-
-process_btn = tk.Button(root, text="Обработать цвета", command=process_colors, height=2)
-process_btn.pack(pady=10)
-
-result_frame = tk.LabelFrame(root, text="Результаты")
-result_frame.pack(fill='both', expand=True, padx=10, pady=10)
-
-result_text = tk.Text(result_frame, height=10)
-result_text.pack(fill='both', expand=True, padx=10, pady=10)
-make_context_menu(result_text)  # Добавляем контекстное меню для текстового поля результатов
-
-# Заполняем начальными данными из примера
-def load_example_data():
-    # Очищаем текущие данные
-    for entry in left_entries + right_entries:
-        entry.delete(0, tk.END)
+class MixedStrategy(RecolorStrategy):
+    """Смешанная стратегия"""
     
-    # Левая колонка (светлые цвета)
-    left_example = [""]
-    for i, color in enumerate(left_example):
-        if i < len(left_entries):
-            left_entries[i].insert(0, color)
-            left_previews[i].config(bg="#" + color)
+    def recolor(self, original_hls: Tuple[float, float, float],
+                target_hls: Tuple[float, float, float],
+                luminance_ratio: float,
+                intensity: float) -> Tuple[float, float, float]:
+        orig_h, orig_l, orig_s = original_hls
+        target_h, target_l, target_s = target_hls
+        
+        new_h = orig_h * (1 - intensity) + target_h * intensity
+        new_l = orig_l * (1 - intensity) + (0.3 + 0.6 * luminance_ratio) * intensity
+        new_s = orig_s * (1 - intensity) + target_s * intensity
+        
+        return new_h, new_l, new_s
+
+
+class StrategyFactory:
+    """Фабрика для создания стратегий перекраски"""
     
-    # Правая колонка (темные цвета)
-    right_example = [""]
-    for i, color in enumerate(right_example):
-        if i < len(right_entries):
-            right_entries[i].insert(0, color)
-            right_previews[i].config(bg="#" + color)
+    _strategies = {
+        RecolorMode.KEEP_HUE: KeepHueStrategy(),
+        RecolorMode.FULL_RECOLOR: FullRecolorStrategy(),
+        RecolorMode.MIXED: MixedStrategy()
+    }
+    
+    @classmethod
+    def get_strategy(cls, mode: RecolorMode) -> RecolorStrategy:
+        """Возвращает стратегию по режиму"""
+        return cls._strategies.get(mode, cls._strategies[RecolorMode.FULL_RECOLOR])
 
-# Инициализация интерфейса
-update_color_boxes()
-# Загружаем пример данных после создания интерфейса
-root.after(100, load_example_data)
 
-root.mainloop()
+# ============================================================================
+# ОСНОВНОЙ СЕРВИС ПЕРЕКРАСКИ
+# ============================================================================
+
+class ColorRecolorService:
+    """Сервис для перекраски палитр цветов"""
+    
+    def __init__(self):
+        self.color_util = ColorUtility()
+    
+    def recolor_palette(self, original_colors: List[str], 
+                       target_base: str, 
+                       intensity: float, 
+                       mode: RecolorMode) -> List[ColorResult]:
+        """Перекрашивает палитру цветов"""
+        
+        # Валидация и нормализация входных цветов
+        valid_colors = [
+            self.color_util.normalize_color(c) 
+            for c in original_colors 
+            if self.color_util.is_valid_color(c)
+        ]
+        
+        if not valid_colors:
+            return []
+        
+        # Получаем целевой цвет
+        target_rgb = np.array(ImageColor.getrgb(target_base)) / 255.0
+        target_hls = colorsys.rgb_to_hls(*target_rgb)
+        
+        # Вычисляем яркости исходных цветов
+        luminances = [
+            self.color_util.relative_luminance(ImageColor.getrgb(c))
+            for c in valid_colors
+        ]
+        
+        min_lum, max_lum = min(luminances), max(luminances)
+        lum_range = max_lum - min_lum if max_lum != min_lum else 1.0
+        
+        # Получаем стратегию перекраски
+        strategy = StrategyFactory.get_strategy(mode)
+        
+        results = []
+        for color, orig_lum in zip(valid_colors, luminances):
+            # Получаем исходный цвет в HLS
+            rgb = np.array(ImageColor.getrgb(color)) / 255.0
+            orig_hls = colorsys.rgb_to_hls(*rgb)
+            
+            # Вычисляем относительную яркость
+            lum_ratio = (orig_lum - min_lum) / lum_range if lum_range > 0 else 0.5
+            
+            # Применяем стратегию
+            new_h, new_l, new_s = strategy.recolor(orig_hls, target_hls, lum_ratio, intensity)
+            
+            # Ограничиваем значения
+            new_h = np.clip(new_h, 0.0, 1.0)
+            new_s = np.clip(new_s, 0.1, 1.0)
+            new_l = np.clip(new_l, 0.1, 0.95)
+            
+            # Конвертируем обратно в RGB
+            new_rgb = colorsys.hls_to_rgb(new_h, new_l, new_s)
+            new_rgb_int = tuple(int(round(x * 255)) for x in new_rgb)
+            
+            new_color_hex = self.color_util.rgb_to_hex(new_rgb_int)
+            new_luminance = self.color_util.relative_luminance(new_rgb_int)
+            
+            results.append(ColorResult(color, new_color_hex, new_luminance))
+        
+        return results
+
+
+# ============================================================================
+# GUI КОМПОНЕНТЫ
+# ============================================================================
+
+class ContextMenuMixin:
+    """Миксин для добавления контекстного меню"""
+    
+    @staticmethod
+    def add_context_menu(widget):
+        """Добавляет контекстное меню к виджету"""
+        menu = tk.Menu(widget, tearoff=0)
+        menu.add_command(label="Копировать", command=lambda: widget.event_generate('<<Copy>>'))
+        menu.add_command(label="Вставить", command=lambda: widget.event_generate('<<Paste>>'))
+        menu.add_command(label="Вырезать", command=lambda: widget.event_generate('<<Cut>>'))
+        menu.add_separator()
+        menu.add_command(label="Выделить все", 
+                        command=lambda: widget.select_range(0, tk.END) if hasattr(widget, 'select_range') 
+                        else widget.tag_add(tk.SEL, "1.0", tk.END))
+        
+        def show_menu(event):
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+        
+        widget.bind("<Button-3>", show_menu)
+        return menu
+
+
+class ColorInputPanel:
+    """Панель для ввода цветов"""
+    
+    def __init__(self, parent, title: str):
+        self.frame = tk.LabelFrame(parent, text=title)
+        self.color_frame = tk.Frame(self.frame)
+        self.color_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        self.entries: List[tk.Entry] = []
+        self.previews: List[tk.Label] = []
+    
+    def create_color_inputs(self, count: int):
+        """Создает поля для ввода цветов"""
+        # Очищаем старые виджеты
+        for widget in self.color_frame.winfo_children():
+            widget.destroy()
+        
+        self.entries.clear()
+        self.previews.clear()
+        
+        for i in range(count):
+            row_frame = tk.Frame(self.color_frame)
+            row_frame.pack(fill='x', pady=2)
+            
+            # Поле ввода
+            entry = tk.Entry(row_frame, width=10)
+            entry.pack(side='left', padx=5)
+            entry.bind('<KeyRelease>', lambda e, idx=i: self._update_preview(idx))
+            ContextMenuMixin.add_context_menu(entry)
+            self.entries.append(entry)
+            
+            # Кнопка выбора цвета
+            btn = tk.Button(row_frame, text="Выбрать", width=8,
+                          command=lambda idx=i: self._choose_color(idx))
+            btn.pack(side='left', padx=5)
+            
+            # Превью цвета
+            preview = tk.Label(row_frame, width=4, height=1, 
+                             relief='solid', borderwidth=1, bg='white')
+            preview.pack(side='left', padx=5)
+            self.previews.append(preview)
+    
+    def _update_preview(self, idx: int):
+        """Обновляет превью цвета"""
+        color = self.entries[idx].get().strip()
+        normalized = ColorUtility.normalize_color(color)
+        
+        if ColorUtility.is_valid_color(normalized):
+            self.previews[idx].config(bg=normalized)
+        else:
+            self.previews[idx].config(bg='white')
+    
+    def _choose_color(self, idx: int):
+        """Открывает диалог выбора цвета"""
+        color_code = colorchooser.askcolor(title="Выберите цвет")
+        if color_code[1]:
+            self.entries[idx].delete(0, tk.END)
+            self.entries[idx].insert(0, color_code[1])
+            self.previews[idx].config(bg=color_code[1])
+    
+    def get_colors(self) -> List[str]:
+        """Возвращает список введенных цветов"""
+        return [entry.get().strip() for entry in self.entries if entry.get().strip()]
+    
+    def set_colors(self, colors: List[str]):
+        """Устанавливает цвета"""
+        for i, color in enumerate(colors):
+            if i < len(self.entries):
+                self.entries[i].delete(0, tk.END)
+                self.entries[i].insert(0, color)
+                normalized = ColorUtility.normalize_color(color)
+                if ColorUtility.is_valid_color(normalized):
+                    self.previews[i].config(bg=normalized)
+    
+    def update_preview_colors(self, colors: List[str]):
+        """Обновляет превью с новыми цветами"""
+        for i, color in enumerate(colors):
+            if i < len(self.previews):
+                self.previews[i].config(bg=color)
+    
+    def pack(self, **kwargs):
+        """Упаковывает фрейм"""
+        self.frame.pack(**kwargs)
+
+
+# ============================================================================
+# ГЛАВНОЕ ПРИЛОЖЕНИЕ
+# ============================================================================
+
+class ColorRecolorApp:
+    """Главное приложение для перекраски цветов"""
+    
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("Перекрашивание цветов")
+        self.root.geometry("950x750")
+        
+        # Сервис для работы с цветами
+        self.recolor_service = ColorRecolorService()
+        
+        # Переменные
+        self.color_count = tk.IntVar(value=6)
+        self.intensity_var = tk.DoubleVar(value=1.0)
+        self.mode_var = tk.StringVar(value=RecolorMode.FULL_RECOLOR.value)
+        
+        # Создаем интерфейс
+        self._create_ui()
+        
+        # Инициализация
+        self.update_color_boxes()
+        self.root.after(100, self._load_example_data)
+    
+    def _create_ui(self):
+        """Создает пользовательский интерфейс"""
+        # Панель управления
+        self._create_control_panel()
+        
+        # Панели ввода цветов
+        main_frame = tk.Frame(self.root)
+        main_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        self.left_panel = ColorInputPanel(main_frame, "Левая колонка (светлые цвета)")
+        self.left_panel.pack(side='left', fill='both', expand=True, padx=5)
+        
+        self.right_panel = ColorInputPanel(main_frame, "Правая колонка (темные цвета)")
+        self.right_panel.pack(side='right', fill='both', expand=True, padx=5)
+        
+        # Кнопка обработки
+        process_btn = tk.Button(self.root, text="Обработать цвета", 
+                               command=self.process_colors, height=2)
+        process_btn.pack(pady=10)
+        
+        # Панель результатов
+        self._create_result_panel()
+    
+    def _create_control_panel(self):
+        """Создает панель управления"""
+        control_frame = tk.Frame(self.root)
+        control_frame.pack(pady=10)
+        
+        # Количество цветов
+        tk.Label(control_frame, text="Количество цветов:").grid(row=0, column=0, padx=5)
+        spinbox = tk.Spinbox(control_frame, from_=1, to=10, width=5,
+                            textvariable=self.color_count,
+                            command=self.update_color_boxes)
+        spinbox.grid(row=0, column=1, padx=5)
+        ContextMenuMixin.add_context_menu(spinbox)
+        
+        # Базовый цвет
+        tk.Label(control_frame, text="Базовый цвет:").grid(row=0, column=2, padx=5)
+        self.base_color_entry = tk.Entry(control_frame, width=10)
+        self.base_color_entry.insert(0, "#3f95a3")
+        self.base_color_entry.grid(row=0, column=3, padx=5)
+        self.base_color_entry.bind('<KeyRelease>', self._update_base_preview)
+        ContextMenuMixin.add_context_menu(self.base_color_entry)
+        
+        btn = tk.Button(control_frame, text="Выбрать", command=self._choose_base_color)
+        btn.grid(row=0, column=4, padx=5)
+        
+        self.base_preview = tk.Label(control_frame, width=4, height=1,
+                                     relief='solid', borderwidth=1, bg="#3f95a3")
+        self.base_preview.grid(row=0, column=5, padx=5)
+        
+        # Слайдер интенсивности
+        tk.Label(control_frame, text="Интенсивность:").grid(row=1, column=0, padx=5, pady=10)
+        slider = ttk.Scale(control_frame, from_=0, to=1, orient="horizontal",
+                          variable=self.intensity_var)
+        slider.grid(row=1, column=1, columnspan=4, sticky="we", padx=5)
+        
+        # Радиокнопки режимов
+        mode_frame = tk.LabelFrame(control_frame, text="Режим перекраски")
+        mode_frame.grid(row=2, column=0, columnspan=6, pady=10, sticky="we")
+        
+        tk.Radiobutton(mode_frame, text="Сохранять оттенки",
+                      variable=self.mode_var, 
+                      value=RecolorMode.KEEP_HUE.value).pack(side="left", padx=10)
+        tk.Radiobutton(mode_frame, text="Полная перекраска",
+                      variable=self.mode_var,
+                      value=RecolorMode.FULL_RECOLOR.value).pack(side="left", padx=10)
+        tk.Radiobutton(mode_frame, text="Смешанный режим",
+                      variable=self.mode_var,
+                      value=RecolorMode.MIXED.value).pack(side="left", padx=10)
+        
+        # Кнопка обновления
+        update_btn = tk.Button(control_frame, text="Обновить цвета",
+                              command=self.update_color_boxes)
+        update_btn.grid(row=1, column=5, padx=5)
+    
+    def _create_result_panel(self):
+        """Создает панель результатов"""
+        result_frame = tk.LabelFrame(self.root, text="Результаты")
+        result_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        self.result_text = tk.Text(result_frame, height=10)
+        self.result_text.pack(fill='both', expand=True, padx=10, pady=10)
+        ContextMenuMixin.add_context_menu(self.result_text)
+    
+    def _choose_base_color(self):
+        """Выбирает базовый цвет"""
+        color_code = colorchooser.askcolor(title="Выберите базовый цвет")
+        if color_code[1]:
+            self.base_color_entry.delete(0, tk.END)
+            self.base_color_entry.insert(0, color_code[1])
+            self.base_preview.config(bg=color_code[1])
+    
+    def _update_base_preview(self, event):
+        """Обновляет превью базового цвета"""
+        color = self.base_color_entry.get().strip()
+        normalized = ColorUtility.normalize_color(color)
+        
+        if ColorUtility.is_valid_color(normalized):
+            self.base_preview.config(bg=normalized)
+        else:
+            self.base_preview.config(bg='white')
+    
+    def update_color_boxes(self):
+        """Обновляет количество полей для цветов"""
+        count = self.color_count.get()
+        self.left_panel.create_color_inputs(count)
+        self.right_panel.create_color_inputs(count)
+    
+    def process_colors(self):
+        """Обрабатывает цвета"""
+        base_color = self.base_color_entry.get()
+        normalized_base = ColorUtility.normalize_color(base_color)
+        
+        if not ColorUtility.is_valid_color(normalized_base):
+            self.result_text.delete(1.0, tk.END)
+            self.result_text.insert(tk.END, "Ошибка: неверный базовый цвет")
+            return
+        
+        # Получаем входные данные
+        left_colors = self.left_panel.get_colors()
+        right_colors = self.right_panel.get_colors()
+        intensity = self.intensity_var.get()
+        mode = RecolorMode(self.mode_var.get())
+        
+        # Обрабатываем цвета
+        left_results = self.recolor_service.recolor_palette(
+            left_colors, normalized_base, intensity, mode
+        )
+        right_results = self.recolor_service.recolor_palette(
+            right_colors, normalized_base, intensity, mode
+        )
+        
+        # Отображаем результаты
+        self._display_results(left_results, right_results)
+        
+        # Обновляем превью
+        self.left_panel.update_preview_colors([r.new_color for r in left_results])
+        self.right_panel.update_preview_colors([r.new_color for r in right_results])
+    
+    def _display_results(self, left_results: List[ColorResult], 
+                        right_results: List[ColorResult]):
+        """Отображает результаты обработки"""
+        self.result_text.delete(1.0, tk.END)
+        
+        self.result_text.insert(tk.END, "Результаты для левой колонки:\n")
+        for i, result in enumerate(left_results, 1):
+            self.result_text.insert(
+                tk.END,
+                f"{i}. {result.original} -> {result.new_color} "
+                f"(яркость: {result.luminance:.3f})\n"
+            )
+        
+        self.result_text.insert(tk.END, "\nРезультаты для правой колонки:\n")
+        for i, result in enumerate(right_results, 1):
+            self.result_text.insert(
+                tk.END,
+                f"{i}. {result.original} -> {result.new_color} "
+                f"(яркость: {result.luminance:.3f})\n"
+            )
+    
+    def _load_example_data(self):
+        """Загружает примеры данных"""
+        # Здесь можно добавить примеры, если нужно
+        pass
+
+
+# ============================================================================
+# ТОЧКА ВХОДА
+# ============================================================================
+
+def main():
+    """Главная функция приложения"""
+    root = tk.Tk()
+    app = ColorRecolorApp(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
